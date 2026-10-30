@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Read aloud</title>
+<style>
+@font-face { font-family: "Archivo"; font-weight: 500; src: url(fonts/archivo-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: "Archivo"; font-weight: 700; src: url(fonts/archivo-latin-700-normal.woff2) format("woff2"); }
+:root {
+  --ground: #eef0f2; --panel: #ffffff; --ink: #14171a; --muted: #59626b; --rule: #d3d8dd; --on-ink: #ffffff;
+  --st-bad: #c8102e; --focus: #005eb8;
+  --num: "Archivo", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ground: #111315; --panel: #1a1d20; --ink: #e8eaec; --muted: #9ea6ae; --rule: #33393f; --on-ink: #111315;
+          --st-bad: #ff4d5a; --focus: #5aa9ff; color-scheme: dark; }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0; }
+body { background: var(--ground); color: var(--ink); font-size: 16px; line-height: 1.5; font-variant-numeric: tabular-nums;
+       font-family: "Archivo", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 8px; }
+@media (min-width: 900px) { main { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); padding: 24px; align-items: start; } }
+.sheet { background: var(--panel); padding: 20px; }
+h1 { font-size: 1.75rem; font-weight: 700; line-height: 1.2; margin-bottom: 16px; }
+h2 { font-size: 1.125rem; font-weight: 700; margin-bottom: 4px; }
+.muted { color: var(--muted); font-size: 0.875rem; }
+textarea { display: block; width: 100%; min-height: 280px; resize: vertical; padding: 12px; font: inherit; color: var(--ink);
+           background: var(--panel); border: 1px solid var(--rule); }
+textarea:focus, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
+button { font: inherit; font-weight: 600; min-height: 44px; padding: 0 16px; cursor: pointer; color: var(--ink);
+         background: var(--panel); border: 1px solid var(--ink); display: inline-flex; align-items: center; gap: 8px; }
+button:hover { background: var(--ground); }
+button.primary { background: var(--ink); color: var(--on-ink); }
+button.primary:hover { background: var(--ink); }
+button:disabled { color: var(--muted); border-color: var(--rule); background: var(--panel); cursor: default; }
+svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: square; flex: none; }
+.count { margin-left: auto; }
+.status { margin-top: 12px; min-height: 24px; }
+.status.bad { color: var(--st-bad); display: flex; gap: 8px; align-items: center; }
+audio { width: 100%; margin-top: 12px; display: none; }
+.voices { list-style: none; margin-top: 12px; border-top: 1px solid var(--rule); }
+.voice { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+         padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.pick { width: 44px; padding: 0; justify-content: center; }
+.pick .box { width: 16px; height: 16px; border: 2px solid var(--ink); }
+.voice.on .pick .box { background: var(--ink); }
+.voice .name { font-weight: 700; }
+.voice .note { color: var(--muted); font-size: 0.875rem; }
+.plays { display: flex; }
+.plays button { min-width: 56px; padding: 0 10px; font-size: 0.875rem; justify-content: center; }
+.plays button + button { border-left: 0; }
+.plays button.playing { background: var(--ink); color: var(--on-ink); }
+.group { margin-top: 20px; }
+.group:first-of-type { margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="sheet">
+    <h1>Read aloud</h1>
+    <label for="text" class="muted">Paste text (English or Mandarin)</label>
+    <textarea id="text" placeholder="Paste text here"></textarea>
+    <div class="bar">
+      <button id="go" class="primary"><svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg><span>Read aloud</span></button>
+      <button id="stop" disabled><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>Stop</button>
+      <button id="save" disabled><svg viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 20h16"/></svg>Download</button>
+      <span class="count muted" id="count"></span>
+    </div>
+    <div class="status muted" id="status"></div>
+    <audio id="player" controls></audio>
+  </section>
+  <section class="sheet">
+    <h2>Voice</h2>
+    <p class="muted">Play a sample, then pick one. Every sample reads the same passage.</p>
+    <div id="voices"></div>
+  </section>
+</main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const PROVIDERS = { aura: "Deepgram Aura-2, English only", qwen: "Qwen3-TTS Flash, English and Mandarin" };
+const voices = await (await fetch("api/voices")).json();
+let voice = localStorage.getItem("voice");
+if (!voices.some((v) => v.id === voice)) voice = voices[0].id;
+const sample = new Audio();
+let sampleBtn = null;
+
+function renderVoices() {
+  const box = $("voices");
+  box.textContent = "";
+  for (const p of Object.keys(PROVIDERS)) {
+    const g = document.createElement("div");
+    g.className = "group";
+    g.innerHTML = `<p class="muted">${PROVIDERS[p]}</p><ul class="voices"></ul>`;
+    for (const v of voices.filter((x) => x.provider === p)) {
+      const li = document.createElement("li");
+      li.className = "voice" + (v.id === voice ? " on" : "");
+      li.innerHTML = `<button class="pick" aria-label="Use ${v.name}"><span class="box"></span></button>
+        <div><div class="name">${v.name}</div><div class="note">${v.note}</div></div><div class="plays"></div>`;
+      li.querySelector(".pick").onclick = () => { voice = v.id; try { localStorage.setItem("voice", voice); } catch {} renderVoices(); };
+      for (const [lang, src] of Object.entries(v.samples)) {
+        const b = document.createElement("button");
+        b.textContent = lang === "en" ? "English" : "中文";
+        b.onclick = () => playSample(b, src);
+        li.querySelector(".plays").append(b);
+      }
+      g.querySelector("ul").append(li);
+    }
+    box.append(g);
+  }
+}
+
+function playSample(b, src) {
+  if (sampleBtn) sampleBtn.classList.remove("playing");
+  if (sampleBtn === b && !sample.paused) { sample.pause(); sampleBtn = null; return; }
+  stopReading();
+  sample.src = src;
+  sample.play();
+  sampleBtn = b;
+  b.classList.add("playing");
+}
+sample.onended = () => { sampleBtn?.classList.remove("playing"); sampleBtn = null; };
+
+const text = $("text");
+const updateCount = () => { $("count").textContent = text.value.length ? `${text.value.length.toLocaleString()} characters` : ""; };
+text.oninput = updateCount;
+try { text.value = localStorage.getItem("draft") || ""; } catch {}
+updateCount();
+text.addEventListener("input", () => { try { localStorage.setItem("draft", text.value); } catch {} });
+
+// Streaming playback: the Worker sends raw 24 kHz PCM; each piece is scheduled right after the previous one.
+const RATE = 24000;
+let ctx, abort, chunks = [], wavUrl;
+
+function setStatus(msg, bad) {
+  const s = $("status");
+  s.className = "status " + (bad ? "bad" : "muted");
+  s.innerHTML = bad ? `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg><span></span>` : "<span></span>";
+  s.querySelector("span").textContent = msg;
+}
+
+function stopReading() {
+  abort?.abort();
+  abort = null;
+  ctx?.close();
+  ctx = null;
+  $("stop").disabled = true;
+  $("go").disabled = false;
+}
+
+$("stop").onclick = () => { stopReading(); setStatus(""); };
+
+$("go").onclick = async () => {
+  const t = text.value.trim();
+  if (!t) { setStatus("Paste some text first.", true); return; }
+  const v = voices.find((x) => x.id === voice);
+  if (v.provider === "aura" && /[一-鿿]/.test(t)) {
+    setStatus(`${v.name} reads English only. Pick a Qwen voice for text with Chinese.`, true);
+    return;
+  }
+  sample.pause(); sampleBtn?.classList.remove("playing"); sampleBtn = null;
+  stopReading();
+  $("player").style.display = "none";
+  $("save").disabled = true;
+  chunks = [];
+  ctx = new AudioContext({ sampleRate: RATE });
+  abort = new AbortController();
+  $("go").disabled = true;
+  $("stop").disabled = false;
+  setStatus("Starting");
+  const t0 = performance.now();
+  const myCtx = ctx;
+  let at = 0, carry = null, first = true;
+  try {
+    const r = await fetch("api/tts", { method: "POST", body: JSON.stringify({ voice, text: t }), signal: abort.signal,
+                                       headers: { "content-type": "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      let bytes = value;
+      if (carry) { bytes = new Uint8Array(carry.length + value.length); bytes.set(carry); bytes.set(value, carry.length); carry = null; }
+      if (bytes.length % 2) { carry = bytes.slice(-1); bytes = bytes.slice(0, -1); }
+      if (!bytes.length) continue;
+      const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
+      const buf = myCtx.createBuffer(1, pcm.length, RATE);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+      const src = myCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(myCtx.destination);
+      if (first) { at = myCtx.currentTime + 0.05; first = false; setStatus(`Playing; first audio after ${((performance.now() - t0) / 1000).toFixed(1)} s`); }
+      at = Math.max(at, myCtx.currentTime);
+      src.start(at);
+      at += buf.duration;
+    }
+    const left = Math.max(0, at - myCtx.currentTime);
+    setStatus(`Playing; all audio received in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    makeWav();
+    setTimeout(() => { if (ctx === myCtx) { stopReading(); setStatus("Done. Replay or download below."); showPlayer(); } }, left * 1000);
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    stopReading();
+    setStatus(e.message || "Something went wrong.", true);
+  }
+};
+
+function makeWav() {
+  const len = chunks.reduce((n, c) => n + c.length, 0) & ~1;
+  const wav = new Uint8Array(44 + len);
+  const dv = new DataView(wav.buffer);
+  const str = (o, s) => [...s].forEach((c, i) => wav[o + i] = c.charCodeAt(0));
+  str(0, "RIFF"); dv.setUint32(4, 36 + len, true); str(8, "WAVEfmt "); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, RATE, true); dv.setUint32(28, RATE * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, "data"); dv.setUint32(40, len, true);
+  let o = 44;
+  for (const c of chunks) { const n = Math.min(c.length, 44 + len - o); wav.set(c.subarray(0, n), o); o += n; }
+  if (wavUrl) URL.revokeObjectURL(wavUrl);
+  wavUrl = URL.createObjectURL(new Blob([wav], { type: "audio/wav" }));
+  $("player").src = wavUrl;
+  $("save").disabled = false;
+}
+function showPlayer() { $("player").style.display = "block"; }
+$("save").onclick = () => { const a = document.createElement("a"); a.href = wavUrl; a.download = "read-aloud.wav"; a.click(); };
+
+renderVoices();
+</script>
+</body>
+</html>

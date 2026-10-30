@@ -1,0 +1,14 @@
+name = "read-aloud"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+account_id = "ee3b4deef856baf11e1a67b242438325"
+workers_dev = false
+routes = [{ pattern = "read.deyaochen.com", custom_domain = true }]
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[ai]
+binding = "AI"
