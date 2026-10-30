@@ -4,7 +4,8 @@ set -euo pipefail
 URL="${URL:-https://read.deyaochen.com}"
 H=(-H "CF-Access-Client-Id: $ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $ACCESS_CLIENT_SECRET")
 
-curl -sf "${H[@]}" "$URL/" | grep -q "<title>Read aloud</title>"
+page=$(curl -sf "${H[@]}" "$URL/")
+grep -q "<title>Read aloud</title>" <<<"$page"
 [ "$(curl -sf "${H[@]}" "$URL/api/voices" | jq length)" -gt 0 ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/")" = 302 ]   # no Access token: sent to the login
 
